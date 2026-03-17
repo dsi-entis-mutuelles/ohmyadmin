@@ -71,3 +71,6 @@ $RECYCLE.BIN/
 settings.json
 config/
 .env
+
+# Modules (téléchargés depuis GitHub)
+mod_*.py
