@@ -471,14 +471,46 @@ def main():
     SP_APP_CLIENT_ID = "162abf7d-37f3-4e58-87f2-be66877ac142"
     SP_TENANT_ID = "d3f5ec4a-5030-4f94-acf4-aa1997d8865a"
 
+    # Dossier de configuration locale
+    CONFIG_DIR = os.path.join(os.getcwd(), "config")
+
     temp_dir = tempfile.mkdtemp(prefix="entis_hub_")
     ad_conn = None
     kp_session = None
     GITHUB_TOKEN = None
     settings = None
 
+    # Etape 1 : Chargement de la configuration locale
+    print_header("CHARGEMENT DE LA CONFIGURATION")
+    print_info(f"Dossier config : {CONFIG_DIR}")
+
+    if not os.path.exists(CONFIG_DIR):
+        print_error(f"Le dossier 'config/' est introuvable.")
+        print_info("Créez le dossier 'config/' avec les fichiers JSON nécessaires.")
+        sys.exit(1)
+
+    # Chargement settings.json
+    local_settings_path = os.path.join(CONFIG_DIR, "settings.json")
+    if os.path.exists(local_settings_path):
+        print_info("Chargement de settings.json...")
+        with open(local_settings_path, "r", encoding="utf-8-sig") as f:
+            settings = json.load(f)
+        print_success("Configuration chargée.")
+    else:
+        print_error("settings.json introuvable dans le dossier 'config/'.")
+        sys.exit(1)
+
+    # Extraction des variables de configuration
+    REPO_OWNER = settings["github"]["repo_owner"]
+    REPO_NAME = settings["github"]["repo_name"]
+    SP_ARRIVANTS_SITE_URL = settings["sharepoint"]["arrivants_site_url"]
+    AD_SERVER_FQDN = settings["active_directory"]["server_fqdn"]
+    AD_DOMAIN = settings["active_directory"]["domain"]
+    SCRIPT_BASES = settings["modules"]["script_bases"]
+    KDBX_PATH_SP = settings["sharepoint"]["keepass_path"]
+
     try:
-        # Etape 1 : Authentification SharePoint (Nécessaire pour le KDBX et settings)
+        # Etape 2 : Authentification SharePoint (pour KeePass uniquement)
         print_header("AUTHENTIFICATION SHAREPOINT SSO")
         print_browser_alert("Utilisation du navigateur pour la connexion MFA.")
         ctx_glpi = None
@@ -494,45 +526,6 @@ def main():
                 print_error(f"Erreur d'authentification SharePoint : {e}")
                 if input("Réessayer (o/n) ? ").lower() != "o":
                     sys.exit(1)
-
-        # Chargement de la configuration externe
-        print_info("Chargement de la configuration externe (settings.json)...")
-        # Essayer d'abord le fichier local
-        local_settings_path = os.path.join(os.getcwd(), "settings.json")
-        if os.path.exists(local_settings_path):
-            print_info("  -> Chargement depuis fichier local : settings.json")
-            with open(local_settings_path, "r", encoding="utf-8-sig") as f:
-                settings = json.load(f)
-            print_success("Configuration locale chargée avec succès.")
-        else:
-            # Fallback : télécharger depuis SharePoint
-            print_info("  → Fichier local introuvé, tentative SharePoint...")
-            settings_path = download_sp_file_to_temp(
-                ctx_glpi, "/sites/GLPI/Data/settings.json", temp_dir
-            )
-            if settings_path:
-                with open(settings_path, "r", encoding="utf-8-sig") as f:
-                    settings = json.load(f)
-                print_success("Configuration SharePoint chargée avec succès.")
-            else:
-                print_error(
-                    "Impossible de charger settings.json (local ou SharePoint)."
-                )
-                sys.exit(1)
-
-        # Extraction des variables de configuration
-        REPO_OWNER = settings["github"]["repo_owner"]
-        REPO_NAME = settings["github"]["repo_name"]
-        SP_ARRIVANTS_SITE_URL = settings["sharepoint"]["arrivants_site_url"]
-        AD_SERVER_FQDN = settings["active_directory"]["server_fqdn"]
-        AD_DOMAIN = settings["active_directory"]["domain"]
-        SCRIPT_BASES = settings["modules"]["script_bases"]
-        KDBX_PATH_SP = settings["sharepoint"]["keepass_path"]
-
-        # Construction de la liste des fichiers de config
-        SP_CONFIG_FILES = [KDBX_PATH_SP] + [
-            f"/sites/GLPI/Data/{f}" for f in settings["referentiels"]
-        ]
 
         # Etape 2 : Récupération du KeePass pour extraire les secrets
         print_info("Récupération du coffre-fort des secrets...")
@@ -583,16 +576,14 @@ def main():
                 )
         show_progress_bar(len(SCRIPT_BASES), len(SCRIPT_BASES), prefix="Scripts GitHub")
 
-        # Etape 5 : Configurations locales (autres fichiers JSON)
-        print_info("Récupération des référentiels JSON...")
-        for i, f_url in enumerate(SP_CONFIG_FILES):
-            if f_url == KDBX_PATH_SP:
-                continue  # Déjà fait
-            show_progress_bar(i, len(SP_CONFIG_FILES), prefix="Paramétrage SharePoint")
-            download_sp_file_to_temp(ctx_glpi, f_url, temp_dir)
-        show_progress_bar(
-            len(SP_CONFIG_FILES), len(SP_CONFIG_FILES), prefix="Paramétrage SharePoint"
-        )
+        # Etape 5 : Chargement des référentiels JSON depuis dossier config/
+        print_info("Chargement des référentiels JSON...")
+        for ref_file in settings.get("referentiels", []):
+            ref_path = os.path.join(CONFIG_DIR, ref_file)
+            if os.path.exists(ref_path):
+                print_info(f"  -> {ref_file}")
+            else:
+                print_warning(f"  -> {ref_file} (non trouvé)")
         print_success("Référentiels chargés.")
 
         # Etape 6 : Authentification Active Directory
@@ -713,7 +704,7 @@ def main():
                             ctx_glpi=ctx_glpi,
                             ctx_arrivants=ctx_arr,
                             conn=ad_conn,
-                            config_dir=temp_dir,
+                            config_dir=CONFIG_DIR,
                             kp=kp_session,
                             settings=settings,
                         )
@@ -725,7 +716,7 @@ def main():
                                 kp=kp_session,
                                 tenant_id=SP_TENANT_ID,
                                 ad_conn=ad_conn,
-                                config_dir=temp_dir,
+                                config_dir=CONFIG_DIR,
                                 settings=settings,
                             )
                         )

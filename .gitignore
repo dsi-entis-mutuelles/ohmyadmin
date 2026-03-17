@@ -66,4 +66,7 @@ $RECYCLE.BIN/
 *.kdbx
 *.xlsx
 *.xls
-settings.json
+
+# Configuration locale (sensible - à ignorer)
+config/
+.env
