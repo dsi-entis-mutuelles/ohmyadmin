@@ -67,6 +67,7 @@ $RECYCLE.BIN/
 *.xlsx
 *.xls
 
-# Configuration locale (sensible - à ignorer)
+# Configuration locale (sensible)
+settings.json
 config/
 .env

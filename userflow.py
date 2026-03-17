@@ -164,54 +164,75 @@ def setup_environment():
 
 
 # ==============================================================================
-# CHARGEMENT DE LA CONFIGURATION
+# CHARGEMENT DE LA CONFIGURATION DEPUIS SHAREPOINT
 # ==============================================================================
 
 
-def find_config_file(filename):
-    """Cherche un fichier de config dans plusieurs emplacements."""
+def load_settings_local():
+    """Charge le fichier settings.json local minimal."""
+    # Chercher dans plusieurs emplacements
     search_paths = [
-        os.getcwd(),
-        os.path.join(os.getcwd(), CONFIG_DIR),
-        os.path.dirname(__file__),
-        os.path.join(os.path.dirname(__file__), CONFIG_DIR),
+        os.path.join(os.getcwd(), "settings.json"),
+        os.path.join(os.getcwd(), "config", "settings.json"),
+        os.path.join(os.path.dirname(__file__), "settings.json"),
+        os.path.join(os.path.dirname(__file__), "config", "settings.json"),
     ]
+
     for path in search_paths:
-        filepath = os.path.join(path, filename)
-        if os.path.exists(filepath):
-            return filepath
-    return None
-
-
-def load_settings():
-    """Charge le fichier settings.json."""
-    print_info("Chargement de la configuration...")
-
-    settings_path = find_config_file("settings.json")
-    if not settings_path:
-        print_error("settings.json introuvable!")
-        print_info("Creez un dossier 'config/' avec settings.json")
-        sys.exit(1)
-
-    with open(settings_path, "r", encoding="utf-8-sig") as f:
-        settings = json.load(f)
-
-    print_success(f"Configuration chargee depuis : {settings_path}")
-    return settings
-
-
-def load_referentiels(settings):
-    """Charge les fichiers de referentiels JSON."""
-    print_info("Chargement des referentiels...")
-    referentiels = {}
-    for ref_file in settings.get("referentiels", []):
-        path = find_config_file(ref_file)
-        if path:
+        if os.path.exists(path):
+            print_info(f"Configuration locale: {path}")
             with open(path, "r", encoding="utf-8-sig") as f:
-                referentiels[ref_file] = json.load(f)
-            print_info(f"  - {ref_file}")
-        else:
-            print_warning(f"  - {ref_file} (non trouve)")
+                return json.load(f)
+
+    print_error("settings.json introuvable!")
+    print_info("Creez un fichier settings.json avec les infos SharePoint.")
+    sys.exit(1)
+
+
+def download_config_from_sharepoint(ctx, settings, temp_dir):
+    """Telecharge tous les fichiers de config depuis SharePoint."""
+    from office365.sharepoint.files.file import File
+
+    config_library = settings["sharepoint"].get("config_library", "/sites/GLPI/Data")
+    config_files = ["settings.json"] + settings.get("referentiels", [])
+
+    config_data = {}
+
+    print_info("Telechargement de la configuration...")
+
+    for filename in config_files:
+        remote_path = f"{config_library}/{filename}"
+        local_path = os.path.join(temp_dir, filename)
+
+        try:
+            with open(local_path, "wb") as f:
+                File.download(ctx, remote_path).download(f).execute_query()
+            print_info(f"  - {filename}")
+
+            with open(local_path, "r", encoding="utf-8-sig") as f:
+                config_data[filename] = json.load(f)
+        except Exception as e:
+            print_warning(f"  - {filename} (erreur: {str(e)[:50]})")
+            config_data[filename] = {}
+
+    print_success("Configuration telechargee.")
+    return config_data
+
+
+def load_settings(config_data):
+    """Extrait les settings depuis les donnees telechargees."""
+    if "settings.json" not in config_data:
+        print_error("settings.json introuvable!")
+        sys.exit(1)
+    return config_data["settings.json"]
+
+
+def load_referentiels(config_data):
+    """Extrait les referentiels depuis les donnees telechargees."""
+    referentiels = {}
+    for key, value in config_data.items():
+        if key != "settings.json" and value:
+            referentiels[key] = value
     return referentiels
 
 
@@ -572,41 +593,47 @@ def main():
     from office365.sharepoint.client_context import ClientContext
     from ldap3 import Server, Connection, ALL, SIMPLE
 
-    # 3. Chargement configuration
-    settings = load_settings()
-    referentiels = load_referentiels(settings)
-
-    # 4. Deverrouillage KeePass (AVANT SharePoint pour avoir les secrets Azure)
-    print_info("Deverrouillage du coffre-fort...")
-    temp_dir = tempfile.mkdtemp(prefix="userflow_")
-
-    # Telechargement KeePass via auth interactive
-    from office365.sharepoint.client_context import ClientContext
-
+    # 3. Chargement settings minimal local (necessaire pour connexion initiale)
+    print_info("Chargement de la configuration...")
+    settings = load_settings_local()
     sp_config = settings["sharepoint"]
 
-    print_info("Telechargement du coffre-fort KeePass...")
-    ctx_temp = ClientContext(sp_config["glpi_site_url"]).with_interactive(
+    # 4. Connexion SharePoint initiale
+    print_info("Connexion SharePoint...")
+    ctx = ClientContext(sp_config["glpi_site_url"]).with_interactive(
         sp_config["tenant_id"], sp_config["app_client_id"]
     )
+    ctx.load(ctx.web)
+    ctx.execute_query()
+    print_success("Connecte a SharePoint.")
 
+    # 5. Creation du dossier temp
+    temp_dir = tempfile.mkdtemp(prefix="userflow_")
+
+    # 6. Telechargement de la configuration complete
+    config_data = download_config_from_sharepoint(ctx, settings, temp_dir)
+    settings_full = load_settings(config_data)
+    referentiels = load_referentiels(config_data)
+
+    # 7. Deverrouillage KeePass
+    print_info("Deverrouillage du coffre-fort...")
     try:
-        kp = unlock_keepass(ctx_temp, settings, temp_dir)
+        kp = unlock_keepass(ctx, settings_full, temp_dir)
         secrets = get_secrets(kp)
-        settings["_secrets"] = secrets
+        settings_full["_secrets"] = secrets
         print_success("Coffre-fort charge.")
     except Exception as e:
         print_error(f"ErreurKeePass: {e}")
         sys.exit(1)
 
-    # 5. Connexion SharePoint via Azure App (SILENT)
-    ctx = connect_sharepoint(settings, secrets)
+    # 8. Re-connexion SharePoint via Azure App (SILENT)
+    ctx = connect_sharepoint(settings_full, secrets)
 
-    # 6. Chargement des modules
-    modules = load_modules(settings, temp_dir)
+    # 9. Chargement des modules
+    modules = load_modules(settings_full, temp_dir)
 
-    # 7. Connexion Active Directory
-    conn = connect_ad(settings)
+    # 10. Connexion Active Directory
+    conn = connect_ad(settings_full)
 
     # 8. Boucle principale
     while True:

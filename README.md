@@ -1,140 +1,152 @@
 # Userflow — Administration Système Entis Mutuelles
 
-**Version :** 2.0  
+**Version :** 2.1  
 **Date :** Mars 2026
 
 ---
 
 ## Présentation
 
-Userflow est un outil d'administration système qui automatise la gestion du cycle de vie des utilisateurs dans le SI du Groupe Entis Mutuelles.
+Userflow est un outil d'administration système **unique** qui automatise la gestion du cycle de vie des utilisateurs.
 
-**Fonctionnalités :**
-- Création de comptes utilisateurs AD
-- Attribution de licences Microsoft 365
-- Remise de matériel informatique
-- Gestion du parc GLPI
-- Processus de départ utilisateur (offboarding)
-- Synchronisation RH
+**Un seul fichier à utiliser : `userflow.py`**
 
 ---
 
 ## Installation
 
-### 1. Récupérer les fichiers
+### 1. Récupérer le projet
 
 ```bash
 git clone https://github.com/dsi-entis-mutuelles/ohmyadmin.git
 cd ohmyadmin
 ```
 
-### 2. Créer le dossier de configuration
+### 2. Créer settings.json
 
-Créez un dossier `config/` contenant :
+Créez un fichier `settings.json` avec vos paramètres :
 
-```
-config/
-├── settings.json
-├── Adresse_Agences.json
-├── GD_Agence.json
-├── Groupe_service.json
-└── Letsign-it.json
+```json
+{
+    "github": {
+        "repo_owner": "dsi-entis-mutuelles",
+        "repo_name": "ohmyadmin"
+    },
+    "sharepoint": {
+        "glpi_site_url": "https://entis.sharepoint.com/sites/GLPI",
+        "arrivants_site_url": "https://entis-my.sharepoint.com/...",
+        "app_client_id": "VOTRE_CLIENT_ID",
+        "tenant_id": "VOTRE_TENANT_ID",
+        "config_library": "/sites/GLPI/Data",
+        "keepass_path": "/sites/GLPI/Data/python-vault.kdbx"
+    },
+    "active_directory": {
+        "server_fqdn": "srvad04.votredomaine.pri",
+        "domain": "votredomaine.pri"
+    },
+    "modules": {
+        "script_bases": ["mod_user_create", "mod_license_assign", ...]
+    },
+    "referentiels": ["Adresse_Agences.json", "GD_Agence.json", ...]
+}
 ```
 
 ### 3. Configurer le coffre-fort KeePass
 
-Le fichier `python-vault.kdbx` doit contenir :
+Ajoutez dans votre fichier `python-vault.kdbx` :
 
 | Entry | Champ | Valeur |
 |-------|-------|--------|
-| GitHub | Password | Token d'accès GitHub |
-| Azure App | Username | Client ID |
-| Azure App | Password | Client Secret |
+| GitHub | Password | Token GitHub |
+| Azure App | Username | Client ID Azure |
+| Azure App | Password | Client Secret Azure |
 
 ---
 
 ## Utilisation
 
-### Script recommandé : `userflow.py`
-
-C'est le script unique qui fait tout automatiquement.
-
 ```bash
 python userflow.py
 ```
 
-**Étapes :**
-1. Le script crée automatiquement le venv et installe les dépendances
-2. Il charge la configuration depuis le dossier `config/`
-3. Il demande le mot de passe KeePass (1 seule saisie)
-4. Il se connecte à SharePoint silencieusement via Azure App
-5. Il téléchargera les modules depuis GitHub
-6. Il demande les identifiants AD (1 saisie)
-7. Le menu principal s'affiche
+**Le script fait TOUT automatiquement :**
+
+1. Crée le venv et installe les dépendances
+2. Charge `settings.json` localement
+3. Se connecte à SharePoint (MFA navigateur)
+4. Télécharge la configuration complète (referentiels)
+5. Demande le mot de passe KeePass
+6. Se reconnecte via Azure App (silent)
+7. Télécharge les modules depuis GitHub
+8. Demande les identifiants AD
+9. Affiche le menu principal
 
 ---
 
 ## Configuration Azure
 
-Pour SharePoint silent, créez une App Registration Azure avec ces permissions :
+Pour SharePoint silent, créez une App Registration Azure avec :
 
+**Permissions applicatives :**
 - Sites.Read.All
 - Sites.ReadWrite.All
 - User.Read.All
 - Directory.Read.All
 
-Accordez le Admin Consent.
+Accordez le **Admin Consent**.
 
 ---
 
-## Structure des fichiers
+## Fichiers
 
 ```
 ohmyadmin/
-├── userflow.py           # Script principal (recommandé)
-├── hub_central.py       # Orchestrateur alternatif
-├── requirements.txt     # Dépendances Python
-├── config/              # Fichiers de configuration
-│   ├── settings.json
-│   ├── Adresse_Agences.json
-│   ├── GD_Agence.json
-│   ├── Groupe_service.json
-│   └── Letsign-it.json
-└── mod_*.py            # Modules (téléchargés depuis GitHub)
+├── userflow.py       # Script unique (A UTILISER)
+├── settings.json     # Configuration minimale (A CREER)
+├── requirements.txt # Dépendances
+└── README.md
+```
+
+---
+
+## Comment ça marche
+
+```
+python userflow.py
+    │
+    ├─> 1. Auto venv + dependances
+    │
+    ├─> 2. Lit settings.json local
+    │
+    ├─> 3. Auth SharePoint (navigateur)
+    │
+    ├─> 4. Telecharge config depuis SharePoint
+    │       - Adresse_Agences.json
+    │       - GD_Agence.json
+    │       - Groupe_service.json
+    │       - Letsign-it.json
+    │
+    ├─> 5. Mot de passe KeePass (1 saisie)
+    │       - GitHub token
+    │       - Azure credentials
+    │
+    ├─> 6. SharePoint silent via Azure App
+    │
+    ├─> 7. Telecharge modules depuis GitHub
+    │
+    ├─> 8. Identifiants AD (1 saisie)
+    │
+    └─> 9. Menu principal
 ```
 
 ---
 
 ## Dépendances
 
-Les bibliothèques nécessaires sont automatiquement installées :
-
-- `requests` - Appels HTTP
-- `packaging` - Gestion de versions
-- `pykeepass` - Coffre KeePass
-- `office365` - SharePoint API
-- `ldap3` - Active Directory
-- `pandas` - Fichiers Excel
-- `reportlab` - Génération PDF
-
----
-
-## Sécurité
-
-- Les identifiants ne sont jamais stockés en clair
-- Le KeePass contient uniquement les secrets (GitHub, Azure)
-- Les identifiants AD sont saisis manuellement à chaque session
-- SharePoint utilise l'authentification Azure App (silent)
-
----
-
-## Contribution
-
-Pour ajouter un nouveau module :
-
-1. Créer un fichier `mod_nom_module.py`
-2. Implémenter une fonction `async def run(...)`
-3. Le fichier sera détecté et chargé automatiquement
+Installées automatiquement :
+- requests, packaging, pykeepass
+- office365, ldap3, pandas
+- reportlab, azure-identity
 
 ---
 
